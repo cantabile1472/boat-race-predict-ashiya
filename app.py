@@ -7,7 +7,7 @@ import joblib
 # 画面設定
 st.set_page_config(page_title="競艇 3連単確率予想シミュレーター", page_icon="🚤", layout="wide")
 st.title("🚤 競艇 6艇データ入力 & 3連単確率予想シミュレーター")
-st.write("6艇それぞれの「全国勝率」「平均ST」を入力すると、全120通りの3連単出現確率を自動試算します。")
+st.write("6艇それぞれの「全国勝率」「平均ST」を入力すると、コースの有利不利（枠番）を加味して全120通りの3連単出現確率を自動試算します。")
 
 # 保存したモデルの読み込み
 @st.cache_resource
@@ -27,7 +27,6 @@ except Exception as e:
 # --------------------------------------------------
 st.header("📋 出走表データの入力")
 
-# デフォルトの入力値（芦屋などでの標準的な出走表の例）
 default_win_rates = [7.26, 6.17, 5.80, 6.10, 4.80, 4.50]
 default_sts = [0.14, 0.14, 0.15, 0.14, 0.17, 0.16]
 
@@ -44,18 +43,17 @@ for i in range(6):
         wr = st.number_input(f"{frame_num}号艇 勝率", min_value=0.00, max_value=10.00, value=default_win_rates[i], step=0.01, key=f"wr_{frame_num}")
         st_val = st.number_input(f"{frame_num}号艇 平均ST", min_value=0.00, max_value=0.50, value=default_sts[i], step=0.01, key=f"st_{frame_num}")
         
-        # モデルへの入力用データフレームの構築
+        # 特徴量作成（1号艇〜6号艇のワンホット）
         input_dict = {col: [0] for col in feature_columns}
-        target_keys = [f"frame_{frame_num}", f"frame{frame_num}", f"{frame_num}号艇", str(frame_num)]
-        for key in target_keys:
-            if key in input_dict:
-                input_dict[key] = [1]
         
-        for col in feature_columns:
-            if col in ['win_rate', '全国勝率', '勝率']:
-                input_dict[col] = [wr]
-            elif col in ['avg_st', '平均ST', 'ST']:
-                input_dict[col] = [st_val]
+        frame_key = f"frame_{frame_num}"
+        if frame_key in input_dict:
+            input_dict[frame_key] = [1]
+            
+        if 'win_rate' in input_dict:
+            input_dict['win_rate'] = [wr]
+        if 'avg_st' in input_dict:
+            input_dict['avg_st'] = [st_val]
                 
         input_df = pd.DataFrame(input_dict)[feature_columns]
         boats_data.append({
@@ -65,7 +63,7 @@ for i in range(6):
         })
 
 # --------------------------------------------------
-# 2. 予測実行ボタンと計算ロジック（全国勝率ベース）
+# 2. 予測実行ボタンと計算ロジック
 # --------------------------------------------------
 if st.button("🚀 3連単の確率を予測する", type="primary", use_container_width=True):
     
@@ -75,7 +73,7 @@ if st.button("🚀 3連単の確率を予測する", type="primary", use_contain
         df_in = boat['input_df']
         wr = boat['win_rate']
         
-        # 1着確率のみ機械学習モデルから取得
+        # AIモデルから算出された1着確率
         p1 = models['1着率'].predict_proba(df_in)[0][1]
         
         boat_scores[f] = {
@@ -83,9 +81,9 @@ if st.button("🚀 3連単の確率を予測する", type="primary", use_contain
             'win_rate': wr
         }
 
-    # コースごとの紐（2着・3着）残りやすさ補正（イン〜センター重視）
-    place_weight_2nd = {1: 1.00, 2: 0.90, 3: 0.85, 4: 0.75, 5: 0.55, 6: 0.40}
-    place_weight_3rd = {1: 1.00, 2: 0.95, 3: 0.90, 4: 0.80, 5: 0.65, 6: 0.50}
+    # 2着・3着に残りやすいコース補正値
+    place_weight_2nd = {1: 1.00, 2: 0.85, 3: 0.75, 4: 0.65, 5: 0.45, 6: 0.30}
+    place_weight_3rd = {1: 1.00, 2: 0.90, 3: 0.80, 4: 0.70, 5: 0.55, 6: 0.40}
 
     combos = list(itertools.permutations(range(1, 7), 3))
     raw_results = []
@@ -94,9 +92,9 @@ if st.button("🚀 3連単の確率を予測する", type="primary", use_contain
     for c in combos:
         first, second, third = c
         
-        # 1着：モデルの1着確率
-        # 2着：勝率 × 2着コース補正
-        # 3着：勝率 × 3着コース補正
+        # 1着: AIが学習したコース有利込みの1着確率
+        # 2着: 選手の地力（勝率） × コース2着補正
+        # 3着: 選手の地力（勝率） × コース3着補正
         score = (boat_scores[first]['p1']) * \
                 (boat_scores[second]['win_rate'] * place_weight_2nd[second]) * \
                 (boat_scores[third]['win_rate'] * place_weight_3rd[third])
@@ -104,7 +102,7 @@ if st.button("🚀 3連単の確率を予測する", type="primary", use_contain
         total_raw_score += score
         raw_results.append({'出目': f"{first}-{second}-{third}", 'raw_score': score})
     
-    # 確率（100%表記）へ正規化
+    # 全120通りの確率算出（合計100%になるよう正規化）
     results_df = pd.DataFrame(raw_results)
     results_df['確率'] = (results_df['raw_score'] / total_raw_score) * 100
     results_df = results_df.sort_values(by='確率', ascending=False).reset_index(drop=True)
