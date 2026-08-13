@@ -1,0 +1,66 @@
+import streamlit as st
+import pandas as pd
+import joblib
+
+# 画面タイトルと説明
+st.set_page_config(page_title="競艇 着順予測シミュレーター", page_icon="🚤")
+st.title("🚤 競艇 着順予測シミュレーター")
+st.write("「枠番」「全国勝率」「平均ST」を入力して、1着・2着以内・3着以内の確率を予測します。")
+
+# 保存したモデルの読み込み
+@st.cache_resource
+def load_models():
+    models = joblib.load('boat_race_models.pkl')
+    feature_columns = joblib.load('feature_columns.pkl')
+    return models, feature_columns
+
+try:
+    models, feature_columns = load_models()
+except Exception as e:
+    st.error("モデルファイルの読み込みに失敗しました。`boat_race_models.pkl` と `feature_columns.pkl` が同じフォルダにあるか確認してください。")
+
+# 入力フォームの作成
+st.header("📋 レース条件の入力")
+
+col1, col2, col3 = st.columns(3)
+
+with col1:
+    frame_num = st.selectbox("枠番", [1, 2, 3, 4, 5, 6], index=0)
+
+with col2:
+    win_rate = st.number_input("全国勝率", min_value=0.00, max_value=10.00, value=6.50, step=0.01)
+
+with col3:
+    avg_st = st.number_input("平均ST", min_value=0.00, max_value=0.50, value=0.14, step=0.01)
+
+# 予測実行ボタン
+if st.button("🚀 確率を予測する", type="primary"):
+    # ワンホットエンコーディング対応の入力データ作成
+    input_dict = {col: [0] for col in feature_columns}
+    
+    frame_key = f"{frame_num}号艇"
+    if frame_key in input_dict:
+        input_dict[frame_key] = [1]
+        
+    input_dict['全国勝率'] = [win_rate]
+    input_dict['平均ST'] = [avg_st]
+    
+    input_data = pd.DataFrame(input_dict)
+    
+    # 各確率の計算
+    p1 = models['1着率'].predict_proba(input_data)[0][1]
+    p2 = models['2着以内（2連対率）'].predict_proba(input_data)[0][1]
+    p3 = models['3着以内（3連対率）'].predict_proba(input_data)[0][1]
+    
+    # 結果の表示
+    st.markdown("---")
+    st.header("📊 予測結果")
+    
+    res_col1, res_col2, res_col3 = st.columns(3)
+    
+    with res_col1:
+        st.metric(label="1着確率", value=f"{p1:.1%}")
+    with res_col2:
+        st.metric(label="2着以内確率（連対率）", value=f"{p2:.1%}")
+    with res_col3:
+        st.metric(label="3着以内確率（舟券圏内）", value=f"{p3:.1%}")
