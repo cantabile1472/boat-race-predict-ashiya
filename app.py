@@ -27,9 +27,9 @@ except Exception as e:
 # --------------------------------------------------
 st.header("📋 出走表データの入力")
 
-# デフォルト値（一般的なレース出走表の例）
-default_win_rates = [6.80, 5.50, 5.20, 6.10, 4.80, 4.50]
-default_sts = [0.13, 0.15, 0.16, 0.14, 0.17, 0.16]
+# デフォルトの入力値（芦屋などでの標準的な出走表の例）
+default_win_rates = [7.26, 6.17, 5.80, 6.10, 4.80, 4.50]
+default_sts = [0.14, 0.14, 0.15, 0.14, 0.17, 0.16]
 
 boats_data = []
 
@@ -44,63 +44,67 @@ for i in range(6):
         wr = st.number_input(f"{frame_num}号艇 勝率", min_value=0.00, max_value=10.00, value=default_win_rates[i], step=0.01, key=f"wr_{frame_num}")
         st_val = st.number_input(f"{frame_num}号艇 平均ST", min_value=0.00, max_value=0.50, value=default_sts[i], step=0.01, key=f"st_{frame_num}")
         
-        # モデルが要求する特徴量テンプレート（全て0で初期化）
+        # モデルへの入力用データフレームの構築
         input_dict = {col: [0] for col in feature_columns}
-        
-        # 枠番の列名をあらゆるパターン（frame_1, frame1, 1号艇, 1）でチェックして確実に「1」をセット
         target_keys = [f"frame_{frame_num}", f"frame{frame_num}", f"{frame_num}号艇", str(frame_num)]
         for key in target_keys:
             if key in input_dict:
                 input_dict[key] = [1]
         
-        # 勝率と平均STの列名をセット
         for col in feature_columns:
             if col in ['win_rate', '全国勝率', '勝率']:
                 input_dict[col] = [wr]
             elif col in ['avg_st', '平均ST', 'ST']:
                 input_dict[col] = [st_val]
                 
-        # 入力データのフレーム化
         input_df = pd.DataFrame(input_dict)[feature_columns]
-        
         boats_data.append({
             'frame': frame_num,
+            'win_rate': wr,
             'input_df': input_df
         })
 
 # --------------------------------------------------
-# 2. 予測実行ボタンと計算ロジック
+# 2. 予測実行ボタンと計算ロジック（全国勝率ベース）
 # --------------------------------------------------
-if st.button("🚀 3连単の確率を予測する", type="primary", use_container_width=True):
+if st.button("🚀 3連単の確率を予測する", type="primary", use_container_width=True):
     
-    # 各艇の各着順スコア（予測確率）を取得
     boat_scores = {}
     for boat in boats_data:
         f = boat['frame']
         df_in = boat['input_df']
-        p1 = models['1着率'].predict_proba(df_in)[0][1]
-        p2 = models['2着以内（2連対率）'].predict_proba(df_in)[0][1]
-        p3 = models['3着以内（3連対率）'].predict_proba(df_in)[0][1]
+        wr = boat['win_rate']
         
-        boat_scores[f] = {'p1': p1, 'p2': p2, 'p3': p3}
+        # 1着確率のみ機械学習モデルから取得
+        p1 = models['1着率'].predict_proba(df_in)[0][1]
+        
+        boat_scores[f] = {
+            'p1': p1,
+            'win_rate': wr
+        }
 
-    # 全120通りの組み合わせに対して確率を試算
+    # コースごとの紐（2着・3着）残りやすさ補正（イン〜センター重視）
+    place_weight_2nd = {1: 1.00, 2: 0.90, 3: 0.85, 4: 0.75, 5: 0.55, 6: 0.40}
+    place_weight_3rd = {1: 1.00, 2: 0.95, 3: 0.90, 4: 0.80, 5: 0.65, 6: 0.50}
+
     combos = list(itertools.permutations(range(1, 7), 3))
     raw_results = []
     total_raw_score = 0.0
     
     for c in combos:
         first, second, third = c
-        # 1着艇の頭力 × 2着艇の連対力 × 3着艇の紐力
-        score = boat_scores[first]['p1'] * boat_scores[second]['p2'] * boat_scores[third]['p3']
-        total_raw_score += score
         
-        raw_results.append({
-            '出目': f"{first}-{second}-{third}",
-            'raw_score': score
-        })
+        # 1着：モデルの1着確率
+        # 2着：勝率 × 2着コース補正
+        # 3着：勝率 × 3着コース補正
+        score = (boat_scores[first]['p1']) * \
+                (boat_scores[second]['win_rate'] * place_weight_2nd[second]) * \
+                (boat_scores[third]['win_rate'] * place_weight_3rd[third])
+                
+        total_raw_score += score
+        raw_results.append({'出目': f"{first}-{second}-{third}", 'raw_score': score})
     
-    # 全体の合計が100%になるように正規化
+    # 確率（100%表記）へ正規化
     results_df = pd.DataFrame(raw_results)
     results_df['確率'] = (results_df['raw_score'] / total_raw_score) * 100
     results_df = results_df.sort_values(by='確率', ascending=False).reset_index(drop=True)
@@ -112,7 +116,6 @@ if st.button("🚀 3连単の確率を予測する", type="primary", use_contain
     st.markdown("---")
     st.header("📊 3連単 予測確率ランキング")
     
-    # TOP 5の表示
     st.subheader("🔥 期待度 TOP 5")
     top5_cols = st.columns(5)
     for idx in range(5):
@@ -124,10 +127,7 @@ if st.button("🚀 3连単の確率を予測する", type="primary", use_contain
                 delta=f"{row['確率']:.2f}%"
             )
             
-    # 全120通りのテーブル表示
     st.subheader("📋 全120通り 確率一覧（高順位順）")
-    
     display_df = results_df[['順位', '出目', '確率']].copy()
     display_df['確率'] = display_df['確率'].map('{:.2f}%'.format)
-    
     st.dataframe(display_df, use_container_width=True, height=400)
