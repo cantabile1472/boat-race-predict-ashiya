@@ -27,13 +27,12 @@ except Exception as e:
 # --------------------------------------------------
 st.header("📋 出走表データの入力")
 
-# デフォルト値の設定（テスト用数値）
+# デフォルト値（一般的なレース出走表の例）
 default_win_rates = [6.80, 5.50, 5.20, 6.10, 4.80, 4.50]
 default_sts = [0.13, 0.15, 0.16, 0.14, 0.17, 0.16]
 
 boats_data = []
 
-# 3列ずつ2行で入力欄を整理
 cols1 = st.columns(3)
 cols2 = st.columns(3)
 all_cols = cols1 + cols2
@@ -45,35 +44,34 @@ for i in range(6):
         wr = st.number_input(f"{frame_num}号艇 勝率", min_value=0.00, max_value=10.00, value=default_win_rates[i], step=0.01, key=f"wr_{frame_num}")
         st_val = st.number_input(f"{frame_num}号艇 平均ST", min_value=0.00, max_value=0.50, value=default_sts[i], step=0.01, key=f"st_{frame_num}")
         
-        # 特徴量データの作成（モデル学習時の列名に完全一致させる）
+        # モデルが要求する特徴量テンプレート（全て0で初期化）
         input_dict = {col: [0] for col in feature_columns}
         
-        # 1号艇〜6号艇 または frame_1〜frame_6 の両方のワンホット命名に対応
-        if f"{frame_num}号艇" in input_dict:
-            input_dict[f"{frame_num}号艇"] = [1]
-        elif f"frame_{frame_num}" in input_dict:
-            input_dict[f"frame_{frame_num}"] = [1]
-            
-        # 勝率・平均STの列名（日本語・英語どちらでも吸収できるように設定）
-        if '全国勝率' in input_dict:
-            input_dict['全国勝率'] = [wr]
-        elif 'win_rate' in input_dict:
-            input_dict['win_rate'] = [wr]
-            
-        if '平均ST' in input_dict:
-            input_dict['平均ST'] = [st_val]
-        elif 'avg_st' in input_dict:
-            input_dict['avg_st'] = [st_val]
+        # 枠番の列名をあらゆるパターン（frame_1, frame1, 1号艇, 1）でチェックして確実に「1」をセット
+        target_keys = [f"frame_{frame_num}", f"frame{frame_num}", f"{frame_num}号艇", str(frame_num)]
+        for key in target_keys:
+            if key in input_dict:
+                input_dict[key] = [1]
+        
+        # 勝率と平均STの列名をセット
+        for col in feature_columns:
+            if col in ['win_rate', '全国勝率', '勝率']:
+                input_dict[col] = [wr]
+            elif col in ['avg_st', '平均ST', 'ST']:
+                input_dict[col] = [st_val]
+                
+        # 入力データのフレーム化
+        input_df = pd.DataFrame(input_dict)[feature_columns]
         
         boats_data.append({
             'frame': frame_num,
-            'input_df': pd.DataFrame(input_dict)[feature_columns] # 列の並び順も正しく揃える
+            'input_df': input_df
         })
 
 # --------------------------------------------------
 # 2. 予測実行ボタンと計算ロジック
 # --------------------------------------------------
-if st.button("🚀 3連単の確率を予測する", type="primary", use_container_width=True):
+if st.button("🚀 3连単の確率を予測する", type="primary", use_container_width=True):
     
     # 各艇の各着順スコア（予測確率）を取得
     boat_scores = {}
@@ -86,14 +84,14 @@ if st.button("🚀 3連単の確率を予測する", type="primary", use_contain
         
         boat_scores[f] = {'p1': p1, 'p2': p2, 'p3': p3}
 
-    # 全120通りの組み合わせ（順列）に対して生スコアを計算
+    # 全120通りの組み合わせに対して確率を試算
     combos = list(itertools.permutations(range(1, 7), 3))
     raw_results = []
-    
     total_raw_score = 0.0
     
     for c in combos:
         first, second, third = c
+        # 1着艇の頭力 × 2着艇の連対力 × 3着艇の紐力
         score = boat_scores[first]['p1'] * boat_scores[second]['p2'] * boat_scores[third]['p3']
         total_raw_score += score
         
@@ -102,7 +100,7 @@ if st.button("🚀 3連単の確率を予測する", type="primary", use_contain
             'raw_score': score
         })
     
-    # 全体の合計が100%になるように正規化（確率化）
+    # 全体の合計が100%になるように正規化
     results_df = pd.DataFrame(raw_results)
     results_df['確率'] = (results_df['raw_score'] / total_raw_score) * 100
     results_df = results_df.sort_values(by='確率', ascending=False).reset_index(drop=True)
