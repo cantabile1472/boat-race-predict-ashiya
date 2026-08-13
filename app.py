@@ -45,17 +45,29 @@ for i in range(6):
         wr = st.number_input(f"{frame_num}号艇 勝率", min_value=0.00, max_value=10.00, value=default_win_rates[i], step=0.01, key=f"wr_{frame_num}")
         st_val = st.number_input(f"{frame_num}号艇 平均ST", min_value=0.00, max_value=0.50, value=default_sts[i], step=0.01, key=f"st_{frame_num}")
         
-        # 特徴量データの作成
+        # 特徴量データの作成（モデル学習時の列名に完全一致させる）
         input_dict = {col: [0] for col in feature_columns}
-        frame_key = f"{frame_num}号艇"
-        if frame_key in input_dict:
-            input_dict[frame_key] = [1]
-        input_dict['全国勝率'] = [wr]
-        input_dict['平均ST'] = [st_val]
+        
+        # 1号艇〜6号艇 または frame_1〜frame_6 の両方のワンホット命名に対応
+        if f"{frame_num}号艇" in input_dict:
+            input_dict[f"{frame_num}号艇"] = [1]
+        elif f"frame_{frame_num}" in input_dict:
+            input_dict[f"frame_{frame_num}"] = [1]
+            
+        # 勝率・平均STの列名（日本語・英語どちらでも吸収できるように設定）
+        if '全国勝率' in input_dict:
+            input_dict['全国勝率'] = [wr]
+        elif 'win_rate' in input_dict:
+            input_dict['win_rate'] = [wr]
+            
+        if '平均ST' in input_dict:
+            input_dict['平均ST'] = [st_val]
+        elif 'avg_st' in input_dict:
+            input_dict['avg_st'] = [st_val]
         
         boats_data.append({
             'frame': frame_num,
-            'input_df': pd.DataFrame(input_dict)
+            'input_df': pd.DataFrame(input_dict)[feature_columns] # 列の並び順も正しく揃える
         })
 
 # --------------------------------------------------
@@ -82,7 +94,6 @@ if st.button("🚀 3連単の確率を予測する", type="primary", use_contain
     
     for c in combos:
         first, second, third = c
-        # 1着艇の1着力 × 2着艇の連対力 × 3着艇の3連対力 で出目確率の重みを試算
         score = boat_scores[first]['p1'] * boat_scores[second]['p2'] * boat_scores[third]['p3']
         total_raw_score += score
         
@@ -118,7 +129,6 @@ if st.button("🚀 3連単の確率を予測する", type="primary", use_contain
     # 全120通りのテーブル表示
     st.subheader("📋 全120通り 確率一覧（高順位順）")
     
-    # 表示用の整形
     display_df = results_df[['順位', '出目', '確率']].copy()
     display_df['確率'] = display_df['確率'].map('{:.2f}%'.format)
     
